@@ -9,10 +9,13 @@ use bevy_render::{
     view::{ViewTarget, ViewUniform},
 };
 
+use crate::TextureScalerUniform;
+
 #[derive(Resource)]
 pub struct UiPipeline {
     pub view_layout: BindGroupLayout,
     pub image_layout: BindGroupLayout,
+    pub scale_layout: BindGroupLayout,
 }
 
 impl FromWorld for UiPipeline {
@@ -38,9 +41,18 @@ impl FromWorld for UiPipeline {
             ),
         );
 
+        let scale_layout = render_device.create_bind_group_layout(
+            "ui_scale_layout",
+            &BindGroupLayoutEntries::single(
+                ShaderStages::FRAGMENT,
+                uniform_buffer::<TextureScalerUniform>(true),
+            ),
+        );
+
         UiPipeline {
             view_layout,
             image_layout,
+            scale_layout,
         }
     }
 }

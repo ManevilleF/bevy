@@ -5,7 +5,9 @@ mod ui_material_pipeline;
 use bevy_core_pipeline::{core_2d::Camera2d, core_3d::Camera3d};
 use bevy_hierarchy::Parent;
 use bevy_render::{
-    render_phase::PhaseItem, render_resource::BindGroupEntries, view::ViewVisibility,
+    render_phase::PhaseItem,
+    render_resource::{BindGroupEntries, UniformBuffer},
+    view::ViewVisibility,
     ExtractSchedule, Render,
 };
 use bevy_sprite::{SpriteAssetEvents, TextureAtlas};
@@ -14,14 +16,14 @@ pub use render_pass::*;
 pub use ui_material_pipeline::*;
 
 use crate::{
-    texture_slice::ComputedTextureSlices, BackgroundColor, BorderColor, CalculatedClip,
-    ContentSize, DefaultUiCamera, Node, Outline, Style, TargetCamera, UiImage, UiScale, Val,
+    prelude::ImageScaleOptions, BackgroundColor, BorderColor, CalculatedClip, ContentSize,
+    DefaultUiCamera, Node, Outline, Style, TargetCamera, UiImage, UiScale, Val,
 };
 
 use bevy_app::prelude::*;
 use bevy_asset::{load_internal_asset, AssetEvent, AssetId, Assets, Handle};
 use bevy_ecs::prelude::*;
-use bevy_math::{Mat4, Rect, URect, UVec4, Vec2, Vec3, Vec4Swizzles};
+use bevy_math::{Mat4, Rect, URect, UVec4, Vec2, Vec3, Vec4, Vec4Swizzles};
 use bevy_render::{
     camera::Camera,
     color::Color,
@@ -164,6 +166,8 @@ pub struct ExtractedUiNode {
     // it is defaulted to a single camera if only one exists.
     // Nodes with ambiguous camera will be ignored.
     pub camera_entity: Entity,
+    pub slice_border: Option<Vec4>,
+    pub tiling_factor: Option<Vec2>,
 }
 
 #[derive(Resource, Default)]
@@ -298,6 +302,8 @@ pub fn extract_uinode_borders(
                         flip_x: false,
                         flip_y: false,
                         camera_entity,
+                        slice_border: None,
+                        tiling_factor: None,
                     },
                 );
             }
@@ -389,6 +395,8 @@ pub fn extract_uinode_outlines(
                         flip_x: false,
                         flip_y: false,
                         camera_entity,
+                        slice_border: None,
+                        tiling_factor: None,
                     },
                 );
             }
@@ -397,7 +405,6 @@ pub fn extract_uinode_outlines(
 }
 
 pub fn extract_uinodes(
-    mut commands: Commands,
     mut extracted_uinodes: ResMut<ExtractedUiNodes>,
     texture_atlases: Extract<Res<Assets<TextureAtlasLayout>>>,
     default_ui_camera: Extract<DefaultUiCamera>,
@@ -412,7 +419,7 @@ pub fn extract_uinodes(
             Option<&CalculatedClip>,
             Option<&TextureAtlas>,
             Option<&TargetCamera>,
-            Option<&ComputedTextureSlices>,
+            Option<&ImageScaleOptions>,
         )>,
     >,
 ) {
@@ -426,7 +433,7 @@ pub fn extract_uinodes(
         clip,
         atlas,
         camera,
-        slices,
+        scale,
     ) in uinode_query.iter()
     {
         let Some(camera_entity) = camera.map(TargetCamera::entity).or(default_ui_camera.get())
@@ -435,15 +442,6 @@ pub fn extract_uinodes(
         };
         // Skip invisible and completely transparent nodes
         if !view_visibility.get() || color.0.is_fully_transparent() {
-            continue;
-        }
-
-        if let Some((image, slices)) = maybe_image.zip(slices) {
-            extracted_uinodes.uinodes.extend(
-                slices
-                    .extract_ui_nodes(transform, uinode, color, image, clip, camera_entity)
-                    .map(|e| (commands.spawn_empty().id(), e)),
-            );
             continue;
         }
 
@@ -489,6 +487,8 @@ pub fn extract_uinodes(
                 flip_x,
                 flip_y,
                 camera_entity,
+                slice_border: scale.and_then(|s| s.slice_border),
+                tiling_factor: scale.and_then(|s| s.tile_factor),
             },
         );
     }
@@ -653,6 +653,8 @@ pub fn extract_text_uinodes(
                     flip_x: false,
                     flip_y: false,
                     camera_entity,
+                    slice_border: None,
+                    tiling_factor: None,
                 },
             );
         }
@@ -692,11 +694,20 @@ pub(crate) const QUAD_VERTEX_POSITIONS: [Vec3; 4] = [
 
 pub(crate) const QUAD_INDICES: [usize; 6] = [0, 2, 3, 0, 1, 2];
 
+#[derive(Debug, Clone, ShaderType)]
+pub struct TextureScalerUniform {
+    pub border: Vec4,
+    pub tiling_factor: Vec2,
+}
+
 #[derive(Component)]
 pub struct UiBatch {
     pub range: Range<u32>,
     pub image: AssetId<Image>,
     pub camera: Entity,
+    pub slice_border: Option<Vec4>,
+    pub scale_factor: Option<Vec2>,
+    pub scale_bind_group: BindGroup,
 }
 
 const TEXTURED_QUAD: u32 = 0;
@@ -799,15 +810,34 @@ pub fn prepare_uinodes(
                             && batch_image_handle != extracted_uinode.image)
                         || existing_batch.as_ref().map(|(_, b)| b.camera)
                             != Some(extracted_uinode.camera_entity)
+                        || existing_batch.as_ref().and_then(|(_, b)| b.slice_border)
+                            != extracted_uinode.slice_border
+                        || existing_batch.as_ref().and_then(|(_, b)| b.scale_factor)
+                            != extracted_uinode.tiling_factor
                     {
                         if let Some(gpu_image) = gpu_images.get(extracted_uinode.image) {
                             batch_item_index = item_index;
                             batch_image_handle = extracted_uinode.image;
 
+                            let mut buffer: UniformBuffer<_> = TextureScalerUniform {
+                                border: extracted_uinode.slice_border.unwrap_or_default(),
+                                tiling_factor: extracted_uinode.tiling_factor.unwrap_or_default(),
+                            }
+                            .into();
+                            buffer.write_buffer(&render_device, &render_queue);
+                            let scale_bind_group = render_device.create_bind_group(
+                                "ui_scale_bind_group",
+                                &ui_pipeline.scale_layout,
+                                &BindGroupEntries::single(&buffer),
+                            );
+
                             let new_batch = UiBatch {
                                 range: index..index,
                                 image: extracted_uinode.image,
                                 camera: extracted_uinode.camera_entity,
+                                scale_factor: extracted_uinode.tiling_factor,
+                                slice_border: extracted_uinode.slice_border,
+                                scale_bind_group,
                             };
 
                             batches.push((item.entity, new_batch));
