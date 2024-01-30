@@ -36,12 +36,6 @@ fn button_system(
 fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     let image = asset_server.load("textures/fantasy_ui_borders/panel-border-010.png");
 
-    let slicer = TextureSlicer {
-        border: BorderRect::square(22.0),
-        center_scale_mode: SliceScaleMode::Stretch,
-        sides_scale_mode: SliceScaleMode::Stretch,
-        max_corner_scale: 1.0,
-    };
     // ui camera
     commands.spawn(Camera2dBundle::default());
     commands
@@ -70,7 +64,10 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
                             ..default()
                         },
                         image: image.clone().into(),
-                        scale_mode: ImageScaleMode::Sliced(slicer.clone()),
+                        scale_options: ImageScaleOptions {
+                            slice_border: Some(Vec4::splat(22.0)),
+                            tile_factor: None,
+                        },
                         ..default()
                     })
                     .with_children(|parent| {

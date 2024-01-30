@@ -149,6 +149,7 @@ pub type DrawUi = (
     SetItemPipeline,
     SetUiViewBindGroup<0>,
     SetUiTextureBindGroup<1>,
+    SetUiScaleBindGroup<2>,
     DrawUiNode,
 );
 
@@ -173,6 +174,7 @@ impl<P: PhaseItem, const I: usize> RenderCommand<P> for SetUiViewBindGroup<I> {
         RenderCommandResult::Success
     }
 }
+
 pub struct SetUiTextureBindGroup<const I: usize>;
 impl<P: PhaseItem, const I: usize> RenderCommand<P> for SetUiTextureBindGroup<I> {
     type Param = SRes<UiImageBindGroups>;
@@ -192,6 +194,26 @@ impl<P: PhaseItem, const I: usize> RenderCommand<P> for SetUiTextureBindGroup<I>
         RenderCommandResult::Success
     }
 }
+
+pub struct SetUiScaleBindGroup<const T: usize>;
+impl<P: PhaseItem, const I: usize> RenderCommand<P> for SetUiScaleBindGroup<I> {
+    type Param = ();
+    type ViewQuery = ();
+    type ItemQuery = Read<UiBatch>;
+
+    #[inline]
+    fn render<'w>(
+        _item: &P,
+        _view: (),
+        batch: &'w UiBatch,
+        _param: (),
+        pass: &mut TrackedRenderPass<'w>,
+    ) -> RenderCommandResult {
+        pass.set_bind_group(I, &batch.scale_bind_group, &[]);
+        RenderCommandResult::Success
+    }
+}
+
 pub struct DrawUiNode;
 impl<P: PhaseItem> RenderCommand<P> for DrawUiNode {
     type Param = SRes<UiMeta>;
