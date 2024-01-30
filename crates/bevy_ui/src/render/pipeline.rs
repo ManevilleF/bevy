@@ -45,7 +45,7 @@ impl FromWorld for UiPipeline {
             "ui_scale_layout",
             &BindGroupLayoutEntries::single(
                 ShaderStages::FRAGMENT,
-                uniform_buffer::<TextureScalerUniform>(true),
+                uniform_buffer::<TextureScalerUniform>(false),
             ),
         );
 
@@ -102,7 +102,11 @@ impl SpecializedRenderPipeline for UiPipeline {
                     write_mask: ColorWrites::ALL,
                 })],
             }),
-            layout: vec![self.view_layout.clone(), self.image_layout.clone()],
+            layout: vec![
+                self.view_layout.clone(),
+                self.image_layout.clone(),
+                self.scale_layout.clone(),
+            ],
             push_constant_ranges: Vec::new(),
             primitive: PrimitiveState {
                 front_face: FrontFace::Ccw,
